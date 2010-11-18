@@ -100,11 +100,18 @@ void* teleinfuse_process(void * userdata)
         }
       }
     } else {
+      // TODO: remove me when we will have a line checker
       // Unable to open serial port, must leave..
       printf ("Unable to open serial port: \"%s\", must leave..\n", port);
       return NULL;
     }
+    pthread_testcancel();
+#ifdef DEBUG
     sleep (3);
+#else
+    sleep (10);
+#endif
+    pthread_testcancel();
   }
 }
 
@@ -215,50 +222,44 @@ static struct fuse_operations teleinfuse_oper = {
   .read       = teleinfuse_read,
 };
 
-typedef struct {
-  int argc;
-  struct fuse_operations op;
-  char **argv;
-} fuse_data;
-void* fuse_process(void * userdata)
-{
-  fuse_data* data = (fuse_data*) userdata;
-  fuse_main(data->argc, data->argv, &(data->op), NULL);
-  return NULL;
-}
-
+static int foreground = 0;
 int main(int argc, char *argv[])
 {
-  daemon(1,1);
-  openlog("teleinfuse", LOG_PID, LOG_USER) ;
-  pthread_t teleinfuse_thread;
-  pthread_t fuse_thread;
-  int res;
-
-  if (argc!=3) {
+  // Args parssing
+  if (argc<3) {
     printf ("Usage: %s DEV MOUNTPOINT\nExample: %s /dev/ttyUSB0 /house/electric_meter\n", argv[0], argv[0]);
     exit(EXIT_FAILURE);
   }
-  // FIXME: Test if argv[1] is a reacheable.
-  res = pthread_create( &teleinfuse_thread, NULL, teleinfuse_process, (void*) argv[1]);
 
   struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
   for(int i = 0; i < argc; i++) {
+    if (0 == strcmp("-f", argv[i])) {
+      foreground = 1;
+    }
     if (i == 1) {
       // We skip the first arg: it a device link to serial port
     } else {
       fuse_opt_add_arg(&args, argv[i]);
     }
   }
-  //   fuse_opt_add_arg(&args, argv[0]);
+
   fuse_opt_add_arg(&args, "-f"); // Force FUSE to run in foreground
-  fuse_data data = {
-    .argc = args.argc,
-    .argv = args.argv,
-    .op = teleinfuse_oper,
-  };
-  res = pthread_create( &fuse_thread, NULL, fuse_process, (void*) &data);
-  pthread_join( fuse_thread, NULL);
+
+  // Daemonize
+  if(!foreground) {
+    daemon(1,1);
+  }
+
+  openlog("teleinfuse", LOG_PID, LOG_USER) ;
+
+  // FIXME: Test if argv[1] is a reacheable.
+  pthread_t teleinfuse_thread;
+  int res;
+  res = pthread_create( &teleinfuse_thread, NULL, teleinfuse_process, (void*) argv[1]);
+
+  fuse_main (args.argc, args.argv, &teleinfuse_oper, NULL);
+  pthread_cancel (teleinfuse_thread);
+  pthread_join (teleinfuse_thread, NULL);
 
   closelog() ;
   exit(EXIT_SUCCESS) ;
