@@ -20,9 +20,15 @@ typedef struct {
 #define TI_MESSAGE_COUNT_MAX 32
 #define TI_FRAME_LENGTH_MAX (TI_MESSAGE_LENGTH_MAX * TI_MESSAGE_COUNT_MAX)
 
+// returns file descriptor if succeed otherwise 0
 int teleinfo_open (const char * port);
-int teleinfo_read (int fd, char * buffer, size_t buflen);
+
+// returns 0 if succeed otherwise negative
+int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen);
+
+// returns 0 if succeed otherwise negative
 int teleinfo_decode(const char * frame, teleinfo_data dataset[], size_t * datasetlen);
+
 void teleinfo_close (int fd);
 
 #endif

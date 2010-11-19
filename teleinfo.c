@@ -61,34 +61,121 @@ void teleinfo_close (int fd)
 // [ MESSAGE_0 ] 25 char max
 // ... [ MESSAGE_N ]
 // ETX 1 char (0x03)
-int teleinfo_read (int serial_fd, char * buffer, size_t buflen)
+#define STX '\x02'
+#define ETX '\x03' 
+#define EOT '\x04'
+#define LF  '\x0a'
+#define CR  '\x0d'
+int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
 {
-  static char current_chr[2];
-  int res;
-  tcflush(serial_fd, TCIFLUSH) ;                     // Efface les données non lus en entrée.
+  char *p;
+  size_t s;
+  char c;
+  enum state { INIT, FRAME_BEGIN, FRAME_END, MSG_BEGIN, MSG_END };
+  enum state current_state;
+  int error_count = 0;
 
   do {
-    current_chr[1] = current_chr[0] ;
-    res = read(serial_fd, current_chr, 1) ;
+    int res = read(fd, &c, 1) ;
     if (!res) {
-      syslog(LOG_ERR, "Erreur pas de réception début données Téléinfo !\n") ;
-      return 0;
+      syslog(LOG_ERR, "unable to read from source\n") ;
+      return -2;
     }
-  } while ( ! (current_chr[0] == 0x02 && current_chr[1] == 0x03) ) ;       // Attend code fin suivi de début trame téléinfo .
-
-  do {
-    res = read(serial_fd, current_chr, 1) ;
-    if (! res) {
-      syslog(LOG_ERR, "Erreur pas de réception fin données Téléinfo !\n") ;
-      return 0;
+//     syslog(LOG_INFO, "c = %02x", c) ;
+    switch(c) {
+      case STX:
+        if (current_state != INIT) {
+          #ifdef DEBUG
+          syslog(LOG_INFO, "new STX detected but not expected, resetting frame begin") ;
+          #endif
+          error_count++;
+        }
+        current_state = FRAME_BEGIN;
+        p = buffer;
+        s = 0;
+//         if (s<buflen) { *p++ = c; s++; } else { return -1; }
+        break;
+      case LF:
+        if (current_state != INIT) {
+          if ((current_state != FRAME_BEGIN) && (current_state != MSG_END)) {
+            #ifdef DEBUG
+            syslog(LOG_INFO, "LF detected but not expected, frame is invalid") ;
+            #endif
+            error_count++;
+            current_state = INIT;
+          } else {
+            current_state = MSG_BEGIN;
+            if (s<buflen) { *p++ = c; s++; } else { return -1; }
+          }
+        } // else do nothing: simply skip the char
+        break;
+      case CR:
+        if (current_state != INIT) {
+          if (current_state != MSG_BEGIN) {
+            #ifdef DEBUG
+            syslog(LOG_INFO, "CR detected but not expected, frame is invalid") ;
+            #endif
+            error_count++;
+            current_state = INIT;
+          } else {
+            current_state = MSG_END;
+            if (s<buflen) { *p++ = c; s++; } else { return -1; }
+          }
+        } // else do nothing: simply skip the char
+        break;
+      case ETX:
+        if (current_state != INIT) {
+          if (current_state != MSG_END) {
+            #ifdef DEBUG
+            syslog(LOG_INFO, "ETX detected but not expected, frame is invalid") ;
+            #endif
+            error_count++;
+            current_state = INIT;
+          } else {
+            current_state = FRAME_END;
+//             if (s<buflen) { *p++ = c; s++; } else { return -1; }
+          }
+        } // else do nothing: simply skip the char
+        break;
+      case EOT:
+        syslog(LOG_INFO, "frame have been interrupted by EOT, resetting frame");
+        current_state = INIT;
+        break;
+      default:
+        switch(current_state) {
+          case INIT:
+            // STX have not been detected yet, so we skip char
+            break;
+          case FRAME_BEGIN:
+            #ifdef DEBUG
+            syslog(LOG_INFO, "STX should be followed by LF, frame is invalid") ;
+            #endif
+            current_state = INIT;
+            error_count++;
+            break;
+          case FRAME_END:
+            // We should not be here !
+            break;
+          case MSG_BEGIN:
+            // Message content
+            if (s<buflen) { *p++ = c; s++; } else { return -1; }
+            break;
+          case MSG_END:
+            #ifdef DEBUG
+            syslog(LOG_INFO, "CR should be followed by ETX or LF, frame is invalid") ;
+            #endif
+            current_state = INIT;
+            error_count++;
+            break;
+        }
     }
-    *buffer = current_chr[0];
-    buffer++;
-    buflen--;
-  } while (buflen && (current_chr[0] != 0x03)) ;                    // Attend code fin trame téléinfo.
-  *(buffer-1) = '\0';
-
-  return buflen ? 1 : 0;
+  } while ((current_state != FRAME_END) && (error_count<10));
+  if (current_state == FRAME_END) {
+    return 0;
+  } else {
+    syslog(LOG_INFO, "too many error while reading, giving up");
+    return -3;
+  }
 }
 
 int teleinfo_checksum(char *message)
@@ -124,7 +211,7 @@ int teleinfo_decode(const char * frame, teleinfo_data dataset[], size_t * datase
 
   while ( (message_oel = strchr(message, 0x0d)) ) {
     if (1 == teleinfo_checksum(message)) {
-      message++; // On passe le LN de début de ligne
+      message++; // On passe le LF de début de ligne
 
       sscanf( message, "%s %s *", label, value );
       // TODO: Check if lenght(label) > 8
@@ -137,12 +224,12 @@ int teleinfo_decode(const char * frame, teleinfo_data dataset[], size_t * datase
       // Erreur de checksum
       wrong_checksum_count++;
       if (wrong_checksum_count>=3) {
-        return 0;
+        return -1;
        }
     }
     message = message_oel; // On se place sur la fin de ligne
     message++; // On passe le CR de fin de ligne
   }
   *datasetlen = data_count;
-  return 1;
+  return 0;
 }

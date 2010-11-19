@@ -80,31 +80,64 @@ void teleinfuse_update (const teleinfo_data dataset[], size_t datasetlen)
   pthread_mutex_unlock( &teleinfuse_files_mutex );
 }
 
+enum status { ONLINE, OFFLINE, DISCONNECTED, ERROR };
+const char * status_str(enum status s)
+{
+  switch (s) {
+    case ONLINE:
+      return "online";
+      break;
+    case OFFLINE:
+      return "offline";
+      break;
+    case DISCONNECTED:
+      return "disconnected";
+      break;
+    case ERROR:
+      return "error";
+      break;
+  }
+  return "";
+}
+
 void* teleinfuse_process(void * userdata)
 {
   char* port = (char*)userdata;
   int     res ;
   int teleinfo_serial_fd ;
   char teleinfo_buffer[TI_FRAME_LENGTH_MAX];
+  enum status current_status = DISCONNECTED;
+  enum status previous_status = DISCONNECTED;
 
   for(;;) {
+    teleinfo_data teleinfo_dataset[TI_MESSAGE_COUNT_MAX];
+    size_t teleinfo_data_count = 0;
+
     teleinfo_serial_fd = teleinfo_open(port);
     if (teleinfo_serial_fd) {
-      res = teleinfo_read (teleinfo_serial_fd, teleinfo_buffer, sizeof(teleinfo_buffer));
+      res = teleinfo_read_frame ( teleinfo_serial_fd, teleinfo_buffer, sizeof(teleinfo_buffer));
       teleinfo_close (teleinfo_serial_fd);
-      if (res) {
-        teleinfo_data teleinfo_dataset[TI_MESSAGE_COUNT_MAX];
-        size_t teleinfo_data_count = 0;
-        if (teleinfo_decode (teleinfo_buffer, teleinfo_dataset, &teleinfo_data_count)) {
-          teleinfuse_update (teleinfo_dataset, teleinfo_data_count);
-        }
+      if (!res) {
+        res = teleinfo_decode (teleinfo_buffer, teleinfo_dataset, &teleinfo_data_count);
+      }
+      if (!res) {
+        current_status = ONLINE;
+      } else {
+        current_status = OFFLINE;
       }
     } else {
-      // TODO: remove me when we will have a line checker
-      // Unable to open serial port, must leave..
-      printf ("Unable to open serial port: \"%s\", must leave..\n", port);
-      return NULL;
+      current_status = DISCONNECTED;
     }
+    // Add a fake teleinfo file to show status
+    strcpy(teleinfo_dataset[teleinfo_data_count].label, "status");
+    strcpy(teleinfo_dataset[teleinfo_data_count].value, status_str(current_status));
+    if (current_status != previous_status) {
+      syslog(LOG_INFO, "status changed: was \"%s\", now \"%s\"", status_str(previous_status), status_str(current_status));
+      previous_status = current_status;
+    }
+    teleinfo_data_count++;
+
+    teleinfuse_update (teleinfo_dataset, teleinfo_data_count);
     pthread_testcancel();
 #ifdef DEBUG
     sleep (3);
