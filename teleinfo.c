@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <sys/fcntl.h>
 #include <termios.h>
+#include <errno.h>
 
 int teleinfo_open (const char* port)
     // Mode Non-Canonical Input Processing, Attend 1 caractère ou time-out(avec VMIN et VTIME).
@@ -74,12 +75,13 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
   enum state { INIT, FRAME_BEGIN, FRAME_END, MSG_BEGIN, MSG_END };
   enum state current_state;
   int error_count = 0;
+  int bytes_in_init_mode = 0;
 
   do {
     int res = read(fd, &c, 1) ;
     if (!res) {
       syslog(LOG_ERR, "unable to read from source\n") ;
-      return -2;
+      return EIO;
     }
 //     syslog(LOG_INFO, "c = %02x", c) ;
     switch(c) {
@@ -93,7 +95,7 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
         current_state = FRAME_BEGIN;
         p = buffer;
         s = 0;
-//         if (s<buflen) { *p++ = c; s++; } else { return -1; }
+//         if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
         break;
       case LF:
         if (current_state != INIT) {
@@ -105,7 +107,7 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
             current_state = INIT;
           } else {
             current_state = MSG_BEGIN;
-            if (s<buflen) { *p++ = c; s++; } else { return -1; }
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
           }
         } // else do nothing: simply skip the char
         break;
@@ -119,7 +121,7 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
             current_state = INIT;
           } else {
             current_state = MSG_END;
-            if (s<buflen) { *p++ = c; s++; } else { return -1; }
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
           }
         } // else do nothing: simply skip the char
         break;
@@ -133,7 +135,7 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
             current_state = INIT;
           } else {
             current_state = FRAME_END;
-//             if (s<buflen) { *p++ = c; s++; } else { return -1; }
+//             if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
           }
         } // else do nothing: simply skip the char
         break;
@@ -158,7 +160,7 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
             break;
           case MSG_BEGIN:
             // Message content
-            if (s<buflen) { *p++ = c; s++; } else { return -1; }
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
             break;
           case MSG_END:
             #ifdef DEBUG
@@ -169,12 +171,13 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
             break;
         }
     }
-  } while ((current_state != FRAME_END) && (error_count<10));
+    if (current_state == INIT) bytes_in_init_mode++;
+  } while ((current_state != FRAME_END) && (error_count<10) && (bytes_in_init_mode<TI_FRAME_LENGTH_MAX*2));
   if (current_state == FRAME_END) {
     return 0;
   } else {
     syslog(LOG_INFO, "too many error while reading, giving up");
-    return -3;
+    return EBADMSG;
   }
 }
 
@@ -224,7 +227,7 @@ int teleinfo_decode(const char * frame, teleinfo_data dataset[], size_t * datase
       // Erreur de checksum
       wrong_checksum_count++;
       if (wrong_checksum_count>=3) {
-        return -1;
+        return EBADMSG;
        }
     }
     message = message_oel; // On se place sur la fin de ligne

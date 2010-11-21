@@ -100,10 +100,12 @@ const char * status_str(enum status s)
   return "";
 }
 
+typedef struct { uint interval; const char* port; } teleinfuse_data;
 void* teleinfuse_process(void * userdata)
 {
-  char* port = (char*)userdata;
-  int     res ;
+  teleinfuse_data * data;
+  data = (teleinfuse_data*)userdata;
+  int     err ;
   int teleinfo_serial_fd ;
   char teleinfo_buffer[TI_FRAME_LENGTH_MAX];
   enum status current_status = DISCONNECTED;
@@ -113,15 +115,17 @@ void* teleinfuse_process(void * userdata)
     teleinfo_data teleinfo_dataset[TI_MESSAGE_COUNT_MAX];
     size_t teleinfo_data_count = 0;
 
-    teleinfo_serial_fd = teleinfo_open(port);
+    teleinfo_serial_fd = teleinfo_open(data->port);
     if (teleinfo_serial_fd) {
-      res = teleinfo_read_frame ( teleinfo_serial_fd, teleinfo_buffer, sizeof(teleinfo_buffer));
+      err = teleinfo_read_frame ( teleinfo_serial_fd, teleinfo_buffer, sizeof(teleinfo_buffer));
       teleinfo_close (teleinfo_serial_fd);
-      if (!res) {
-        res = teleinfo_decode (teleinfo_buffer, teleinfo_dataset, &teleinfo_data_count);
+      if (!err) {
+        err = teleinfo_decode (teleinfo_buffer, teleinfo_dataset, &teleinfo_data_count);
       }
-      if (!res) {
+      if (!err) {
         current_status = ONLINE;
+      } else if (err==EBADMSG){
+        current_status = ERROR;
       } else {
         current_status = OFFLINE;
       }
@@ -140,7 +144,7 @@ void* teleinfuse_process(void * userdata)
     teleinfuse_update (teleinfo_dataset, teleinfo_data_count);
     pthread_testcancel();
 #ifdef DEBUG
-    sleep (3);
+    sleep (data->interval);
 #else
     sleep (10);
 #endif
@@ -288,7 +292,10 @@ int main(int argc, char *argv[])
   // FIXME: Test if argv[1] is a reacheable.
   pthread_t teleinfuse_thread;
   int res;
-  res = pthread_create( &teleinfuse_thread, NULL, teleinfuse_process, (void*) argv[1]);
+  teleinfuse_data data;
+  data.port = argv[1];
+  data.interval = 30;
+  res = pthread_create( &teleinfuse_thread, NULL, teleinfuse_process, (void*) &data);
 
   fuse_main (args.argc, args.argv, &teleinfuse_oper, NULL);
   pthread_cancel (teleinfuse_thread);
