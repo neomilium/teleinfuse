@@ -52,7 +52,15 @@ typedef struct {
   // time_t td;
 } teleinfuse_file;
 
+typedef struct {
+  uint interval;
+  const char* port;
+} teleinfuse_args;
+
 static pthread_mutex_t teleinfuse_files_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_t teleinfuse_thread;
+teleinfuse_args teleinfuse_thread_args;
+
 static teleinfuse_file teleinfuse_files[32];
 static size_t teleinfuse_files_count = 0;
 
@@ -114,11 +122,8 @@ const char * status_str(enum status s)
   return "";
 }
 
-typedef struct { uint interval; const char* port; } teleinfuse_data;
 void* teleinfuse_process(void * userdata)
 {
-  teleinfuse_data * data;
-  data = (teleinfuse_data*)userdata;
   int     err ;
   int teleinfo_serial_fd ;
   char teleinfo_buffer[TI_FRAME_LENGTH_MAX];
@@ -129,7 +134,7 @@ void* teleinfuse_process(void * userdata)
     teleinfo_data teleinfo_dataset[TI_MESSAGE_COUNT_MAX];
     size_t teleinfo_data_count = 0;
 
-    teleinfo_serial_fd = teleinfo_open(data->port);
+    teleinfo_serial_fd = teleinfo_open(teleinfuse_thread_args.port);
     if (teleinfo_serial_fd) {
       err = teleinfo_read_frame ( teleinfo_serial_fd, teleinfo_buffer, sizeof(teleinfo_buffer));
       teleinfo_close (teleinfo_serial_fd);
@@ -158,12 +163,17 @@ void* teleinfuse_process(void * userdata)
     teleinfuse_update (teleinfo_dataset, teleinfo_data_count);
     pthread_testcancel();
 #ifdef DEBUG
-    sleep (data->interval);
-#else
     sleep (10);
+#else
+    sleep (teleinfuse_thread_args->interval);
 #endif
     pthread_testcancel();
   }
+}
+static void *teleinfuse_init(struct fuse_conn_info *conn)
+{
+  pthread_create( &teleinfuse_thread, NULL, teleinfuse_process, NULL);
+  return NULL;
 }
 
 static int teleinfuse_getattr(const char *path, struct stat *stbuf)
@@ -266,11 +276,19 @@ static int teleinfuse_read(const char *path, char *buf, size_t size, off_t offse
   return size;
 }
 
+static void teleinfuse_destroy(void * p)
+{
+  pthread_cancel (teleinfuse_thread);
+  pthread_join (teleinfuse_thread, NULL);
+}
+
 static struct fuse_operations teleinfuse_oper = {
+  .init       = teleinfuse_init,
   .getattr    = teleinfuse_getattr,
   .readdir    = teleinfuse_readdir,
   .open       = teleinfuse_open,
   .read       = teleinfuse_read,
+  .destroy    = teleinfuse_destroy,
 };
 
 static int foreground = 0;
@@ -284,9 +302,6 @@ int main(int argc, char *argv[])
 
   struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
   for(int i = 0; i < argc; i++) {
-    if (0 == strcmp("-f", argv[i])) {
-      foreground = 1;
-    }
     if (i == 1) {
       // We skip the first arg: it a device link to serial port
     } else {
@@ -294,26 +309,13 @@ int main(int argc, char *argv[])
     }
   }
 
-  fuse_opt_add_arg(&args, "-f"); // Force FUSE to run in foreground
-
-  // Daemonize
-  if(!foreground) {
-    daemon(1,1);
-  }
-
   openlog("teleinfuse", LOG_PID, LOG_USER) ;
 
   // FIXME: Test if argv[1] is a reacheable.
-  pthread_t teleinfuse_thread;
-  int res;
-  teleinfuse_data data;
-  data.port = argv[1];
-  data.interval = 30;
-  res = pthread_create( &teleinfuse_thread, NULL, teleinfuse_process, (void*) &data);
+  teleinfuse_thread_args.port = argv[1];
+  teleinfuse_thread_args.interval = 30;
 
   fuse_main (args.argc, args.argv, &teleinfuse_oper, NULL);
-  pthread_cancel (teleinfuse_thread);
-  pthread_join (teleinfuse_thread, NULL);
 
   closelog() ;
   exit(EXIT_SUCCESS) ;
