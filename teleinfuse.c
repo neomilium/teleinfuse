@@ -165,7 +165,7 @@ void* teleinfuse_process(void * userdata)
 #ifdef DEBUG
     sleep (10);
 #else
-    sleep (teleinfuse_thread_args->interval);
+    sleep (teleinfuse_thread_args.interval);
 #endif
     pthread_testcancel();
   }
@@ -291,7 +291,6 @@ static struct fuse_operations teleinfuse_oper = {
   .destroy    = teleinfuse_destroy,
 };
 
-static int foreground = 0;
 int main(int argc, char *argv[])
 {
   // Args parssing
@@ -311,11 +310,16 @@ int main(int argc, char *argv[])
 
   openlog("teleinfuse", LOG_PID, LOG_USER) ;
 
-  // FIXME: Test if argv[1] is a reacheable.
   teleinfuse_thread_args.port = argv[1];
   teleinfuse_thread_args.interval = 30;
 
-  fuse_main (args.argc, args.argv, &teleinfuse_oper, NULL);
+  int fd;
+  if ( (fd = teleinfo_open(teleinfuse_thread_args.port)) ) { // Be sure the port is reacheable
+    teleinfo_close(fd);
+    fuse_main (args.argc, args.argv, &teleinfuse_oper, NULL);
+  } else {
+    fprintf(stderr, "Unable to reach \"%s\" as serial port.\n", teleinfuse_thread_args.port);
+  }
 
   closelog() ;
   exit(EXIT_SUCCESS) ;
