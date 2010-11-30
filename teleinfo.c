@@ -77,6 +77,21 @@ void teleinfo_close (int fd)
   close (fd);
 }
 
+#ifdef DEBUG
+#include "time.h"
+void dbg_dump(const char* buf, size_t n)
+{
+  time_t now = time(NULL);
+  char filename[32];
+  snprintf(filename, 31, "/tmp/teleinfo-dump-%d", now);
+  syslog(LOG_INFO, "dumping buffer to %s (%d bytes)", filename, n);
+  FILE * file = fopen (filename, "wb");
+  if (fwrite (buf, 1, n, file) != n)
+    syslog(LOG_INFO, "unable to write dump file");
+  fclose (file);
+}
+#endif
+
 // Trame Teleinfo
 // STX 1 char (0x02)
 // [ MESSAGE_0 ] 25 char max
@@ -89,11 +104,11 @@ void teleinfo_close (int fd)
 #define CR  '\x0d'
 int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
 {
-  char *p;
-  size_t s;
+  char *p = buffer;
+  size_t s = 0;
   char c;
   enum state { INIT, FRAME_BEGIN, FRAME_END, MSG_BEGIN, MSG_END };
-  enum state current_state;
+  enum state current_state = INIT;
   int error_count = 0;
   int bytes_in_init_mode = 0;
 
@@ -109,6 +124,8 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
         if (current_state != INIT) {
           #ifdef DEBUG
           syslog(LOG_INFO, "new STX detected but not expected, resetting frame begin") ;
+          if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
+          dbg_dump(buffer, s);
           #endif
           error_count++;
         }
@@ -122,6 +139,8 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
           if ((current_state != FRAME_BEGIN) && (current_state != MSG_END)) {
             #ifdef DEBUG
             syslog(LOG_INFO, "LF detected but not expected, frame is invalid") ;
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
+            dbg_dump(buffer, s);
             #endif
             error_count++;
             current_state = INIT;
@@ -136,6 +155,8 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
           if (current_state != MSG_BEGIN) {
             #ifdef DEBUG
             syslog(LOG_INFO, "CR detected but not expected, frame is invalid") ;
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
+            dbg_dump(buffer, s);
             #endif
             error_count++;
             current_state = INIT;
@@ -150,6 +171,8 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
           if (current_state != MSG_END) {
             #ifdef DEBUG
             syslog(LOG_INFO, "ETX detected but not expected, frame is invalid") ;
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
+            dbg_dump(buffer, s);
             #endif
             error_count++;
             current_state = INIT;
@@ -171,6 +194,8 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
           case FRAME_BEGIN:
             #ifdef DEBUG
             syslog(LOG_INFO, "STX should be followed by LF, frame is invalid") ;
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
+            dbg_dump(buffer, s);
             #endif
             current_state = INIT;
             error_count++;
@@ -185,6 +210,8 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
           case MSG_END:
             #ifdef DEBUG
             syslog(LOG_INFO, "CR should be followed by ETX or LF, frame is invalid") ;
+            if (s<buflen) { *p++ = c; s++; } else { return EMSGSIZE; }
+            dbg_dump(buffer, s);
             #endif
             current_state = INIT;
             error_count++;
