@@ -27,11 +27,13 @@
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 
 #include <pthread.h>
 
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
+#include <fuse/fuse_opt.h>
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -162,11 +164,7 @@ void* teleinfuse_process(void * userdata)
 
     teleinfuse_update (teleinfo_dataset, teleinfo_data_count);
     pthread_testcancel();
-#ifdef DEBUG
-    sleep (10);
-#else
     sleep (teleinfuse_thread_args.interval);
-#endif
     pthread_testcancel();
   }
 }
@@ -290,6 +288,26 @@ static struct fuse_operations teleinfuse_oper = {
   .read       = teleinfuse_read,
   .destroy    = teleinfuse_destroy,
 };
+/** options for fuse_opt.h */
+struct options {
+   int interval;
+}options;
+
+/** macro to define options */
+#define TELEINFUSE_OPT_KEY(t, p, v) { t, offsetof(struct options, p), v }
+
+/** keys for FUSE_OPT_ options */
+enum
+{
+   KEY_VERSION,
+   KEY_HELP,
+};
+
+static struct fuse_opt teleinfuse_opts[] =
+{
+  TELEINFUSE_OPT_KEY("-i %d", interval, 10),
+  FUSE_OPT_END
+};
 
 int main(int argc, char *argv[])
 {
@@ -307,11 +325,14 @@ int main(int argc, char *argv[])
       fuse_opt_add_arg(&args, argv[i]);
     }
   }
+  if (fuse_opt_parse(&args, &options, teleinfuse_opts, NULL) == -1)
+    /** error parsing options */
+    return -1;
 
   openlog("teleinfuse", LOG_PID, LOG_USER) ;
-
+  syslog(LOG_INFO, "starting teleinfuse with %ds intervals", options.interval);
   teleinfuse_thread_args.port = argv[1];
-  teleinfuse_thread_args.interval = 30;
+  teleinfuse_thread_args.interval = options.interval;
 
   int fd;
   if ( (fd = teleinfo_open(teleinfuse_thread_args.port)) ) { // Be sure the port is reacheable

@@ -44,10 +44,11 @@ typedef struct {
 int teleinfo_open (const char * port);
 
 // returns 0 if succeed otherwise negative
-int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen);
+#define teleinfo_read_frame(X, Y, Z) teleinfo_read_frame_ext(X, Y, Z, NULL)
+int teleinfo_read_frame_ext (const int fd, char *const buffer, const size_t buflen, int *error_counter);
 
 // returns 0 if succeed otherwise negative
-int teleinfo_decode(const char * frame, teleinfo_data dataset[], size_t * datasetlen);
+int teleinfo_decode (const char * frame, teleinfo_data dataset[], size_t * datasetlen);
 
 void teleinfo_close (int fd);
 

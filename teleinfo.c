@@ -83,7 +83,7 @@ void dbg_dump(const char* buf, size_t n)
 {
   time_t now = time(NULL);
   char filename[32];
-  snprintf(filename, 31, "/tmp/teleinfo-dump-%d", now);
+  snprintf(filename, 31, "/tmp/teleinfo-dump-%d", (int)now);
   syslog(LOG_INFO, "dumping buffer to %s (%d bytes)", filename, n);
   FILE * file = fopen (filename, "wb");
   if (fwrite (buf, 1, n, file) != n)
@@ -102,7 +102,7 @@ void dbg_dump(const char* buf, size_t n)
 #define EOT '\x04'
 #define LF  '\x0a'
 #define CR  '\x0d'
-int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
+int teleinfo_read_frame_ext (const int fd, char *const buffer, const size_t buflen, int *error_counter)
 {
   char *p = buffer;
   size_t s = 0;
@@ -118,7 +118,6 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
       syslog(LOG_ERR, "unable to read from source\n") ;
       return EIO;
     }
-//     syslog(LOG_INFO, "c = %02x", c) ;
     switch(c) {
       case STX:
         if (current_state != INIT) {
@@ -220,6 +219,9 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
     }
     if (current_state == INIT) bytes_in_init_mode++;
   } while ((current_state != FRAME_END) && (error_count<10) && (bytes_in_init_mode<TI_FRAME_LENGTH_MAX*2));
+  if (error_counter != NULL) {
+    *error_counter = error_count;
+  }
   if (current_state == FRAME_END) {
     return 0;
   } else {
@@ -228,7 +230,7 @@ int teleinfo_read_frame ( const int fd, char *const buffer, const size_t buflen)
   }
 }
 
-int teleinfo_checksum(char *message)
+int teleinfo_checksum (char *message)
 {
   const char * message_oel = strchr(message, 0x0d);             // Mémorise le pointer de fin de ligne
   unsigned char sum = 0 ;                 // Somme des codes ASCII du message
@@ -244,12 +246,12 @@ int teleinfo_checksum(char *message)
     return 1 ;        // Return 1 si checkum ok.*
   }
 #ifdef DEBUG
-  syslog(LOG_INFO, "Checksum lu:%02x   calculé:%02x", *message, sum) ;
+  syslog(LOG_INFO, "wrong checksum: 0x%02x should be 0x%02x", *message, sum) ;
 #endif
   return 0;
 }
 
-int teleinfo_decode(const char * frame, teleinfo_data dataset[], size_t * datasetlen)
+int teleinfo_decode (const char * frame, teleinfo_data dataset[], size_t * datasetlen)
 {
   char * message_oel;
   char * message = (char*)frame;
